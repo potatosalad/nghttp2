@@ -231,13 +231,10 @@ enum class Phase {
 
 struct Client;
 
-// We use systematic sampling method
+// We use reservoir sampling method
 struct Sampling {
-  // sampling interval
-  double interval;
-  // cumulative value of interval, and the next point is the integer
-  // rounded up from this value.
-  double point;
+  // maximum number of samples
+  size_t max_samples;
   // number of samples seen, including discarded samples.
   size_t n;
 };
