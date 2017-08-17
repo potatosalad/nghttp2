@@ -85,6 +85,7 @@ Config::Config()
       rate_period(1.0),
       duration(0.0),
       warm_up_time(0.0),
+      interval(0.0),
       conn_active_timeout(0.),
       conn_inactivity_timeout(0.),
       no_tls_proto(PROTO_HTTP2),
@@ -246,6 +247,11 @@ void duration_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
 
   worker->current_phase = Phase::DURATION_OVER;
 
+  if (worker->config->interval > 0) {
+    ev_timer_stop(worker->loop, &worker->interval_watcher);
+    std::cout << "Stopped interval for thread #" << worker->id << "."
+              << std::endl;
+  }
   std::cout << "Main benchmark duration is over for thread #" << worker->id
             << ". Stopping all clients." << std::endl;
   worker->stop_all_clients();
@@ -281,7 +287,39 @@ void warmup_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
 
   worker->current_phase = Phase::MAIN_DURATION;
 
+  if (worker->config->interval > 0) {
+    std::cout << "Starting interval for thread #" << worker->id << "."
+              << std::endl;
+    worker->interval_start = std::chrono::steady_clock::now();
+    worker->interval_req_success = worker->stats.req_success;
+    ev_timer_start(worker->loop, &worker->interval_watcher);
+  }
   ev_timer_start(worker->loop, &worker->duration_watcher);
+}
+} // namespace
+
+namespace {
+// Called when the interval duration for infinite number of requests are over
+void interval_timeout_cb(struct ev_loop *loop, ev_timer *w, int revents) {
+  auto worker = static_cast<Worker *>(w->data);
+
+  if (worker->current_phase == Phase::MAIN_DURATION) {
+    auto end = std::chrono::steady_clock::now();
+    auto ts = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto duration =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - worker->interval_start);
+    auto secd = std::chrono::duration_cast<std::chrono::duration<double, std::chrono::seconds::period>>(duration);
+    auto req_success = worker->stats.req_success - worker->interval_req_success;
+    // worker->interval_start = end;
+    // worker->interval_req_success = worker->stats.req_success;
+    double rps = 0;
+    rps = req_success / secd.count();
+    std::cout << std::fixed << std::setprecision(2)
+              << "RPSI " << ts
+              << " " << rps
+              << std::endl;
+    // ev_timer_again(worker->loop, &worker->interval_watcher);
+  }
 }
 } // namespace
 
@@ -1307,6 +1345,9 @@ Worker::Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t req_todo, size_t nclients,
   ev_timer_init(&warmup_watcher, warmup_timeout_cb, config->warm_up_time, 0.);
   warmup_watcher.data = this;
 
+  ev_timer_init(&interval_watcher, interval_timeout_cb, config->interval, config->interval);
+  interval_watcher.data = this;
+
   if (config->is_timing_based_mode()) {
     current_phase = Phase::INITIAL_IDLE;
   } else {
@@ -1318,6 +1359,7 @@ Worker::~Worker() {
   ev_timer_stop(loop, &timeout_watcher);
   ev_timer_stop(loop, &duration_watcher);
   ev_timer_stop(loop, &warmup_watcher);
+  ev_timer_stop(loop, &interval_watcher);
   ev_loop_destroy(loop);
 }
 
@@ -1905,6 +1947,8 @@ Options:
               Specifies the  time  period  before  starting the actual
               measurements, in  case  of  timing-based benchmarking.
               Needs to provided along with -D option.
+  --interval=<DURATION>
+              Specifies the interval period.
   -T, --connection-active-timeout=<DURATION>
               Specifies  the maximum  time that  h2load is  willing to
               keep a  connection open,  regardless of the  activity on
@@ -2037,6 +2081,7 @@ int main(int argc, char **argv) {
         {"encoder-header-table-size", required_argument, &flag, 8},
         {"warm-up-time", required_argument, &flag, 9},
         {"log-file", required_argument, &flag, 10},
+        {"interval", required_argument, &flag, 11},
         {nullptr, 0, nullptr, 0}};
     int option_index = 0;
     auto c = getopt_long(argc, argv,
@@ -2263,6 +2308,14 @@ int main(int argc, char **argv) {
       case 10:
         // --log-file
         logfile = optarg;
+        break;
+      case 11:
+        // --interval
+        config.interval = util::parse_duration_with_unit(optarg);
+        if (!std::isfinite(config.interval)) {
+          std::cerr << "--interval: value error " << optarg << std::endl;
+          exit(EXIT_FAILURE);
+        }
         break;
       }
       break;

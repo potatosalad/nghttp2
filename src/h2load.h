@@ -88,6 +88,8 @@ struct Config {
   ev_tstamp duration;
   // amount of time to wait before starting measurements in timing-based test
   ev_tstamp warm_up_time;
+  // interval to display progress
+  ev_tstamp interval;
   // amount of time to wait for activity on a given connection
   ev_tstamp conn_active_timeout;
   // amount of time to wait after the last request is made on a connection
@@ -272,6 +274,9 @@ struct Worker {
   // specified
   ev_timer duration_watcher;
   ev_timer warmup_watcher;
+  ev_timer interval_watcher;
+  std::chrono::steady_clock::time_point interval_start;
+  size_t interval_req_success;
 
   Worker(uint32_t id, SSL_CTX *ssl_ctx, size_t nreq_todo, size_t nclients,
          size_t rate, size_t max_samples, Config *config);
